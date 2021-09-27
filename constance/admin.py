@@ -22,6 +22,8 @@ from django.utils.text import normalize_newlines
 from django.utils.translation import gettext_lazy as _
 from django.urls import path
 
+from .utils import has_setting_permission
+
 from . import LazyConfig, settings
 from .checks import get_inconsistent_fieldnames
 
@@ -32,22 +34,21 @@ config = LazyConfig()
 NUMERIC_WIDGET = forms.TextInput(attrs={'size': 10})
 
 INTEGER_LIKE = (fields.IntegerField, {'widget': NUMERIC_WIDGET})
-STRING_LIKE = (fields.CharField, {
-    'widget': forms.Textarea(attrs={'rows': 3}),
-    'required': False,
-})
+STRING_LIKE = (
+    fields.CharField,
+    {
+        'widget': forms.Textarea(attrs={'rows': 3}),
+        'required': False,
+    },
+)
 
 FIELDS = {
     bool: (fields.BooleanField, {'required': False}),
     int: INTEGER_LIKE,
     Decimal: (fields.DecimalField, {'widget': NUMERIC_WIDGET}),
     str: STRING_LIKE,
-    datetime: (
-        fields.SplitDateTimeField, {'widget': widgets.AdminSplitDateTime}
-    ),
-    timedelta: (
-        fields.DurationField, {'widget': widgets.AdminTextInputWidget}
-    ),
+    datetime: (fields.SplitDateTimeField, {'widget': widgets.AdminSplitDateTime}),
+    timedelta: (fields.DurationField, {'widget': widgets.AdminTextInputWidget}),
     date: (fields.DateField, {'widget': widgets.AdminDateWidget}),
     time: (fields.TimeField, {'widget': widgets.AdminTimeWidget}),
     float: (fields.FloatField, {'widget': NUMERIC_WIDGET}),
@@ -65,9 +66,7 @@ def parse_additional_fields(fields):
 
         if 'widget' in field[1]:
             klass = import_string(field[1]['widget'])
-            field[1]['widget'] = klass(
-                **(field[1].get('widget_kwargs', {}) or {})
-            )
+            field[1]['widget'] = klass(**(field[1].get('widget_kwargs', {}) or {}))
 
             if 'widget_kwargs' in field[1]:
                 del field[1]['widget_kwargs']
@@ -87,8 +86,7 @@ def get_values():
     """
 
     # First load a mapping between config name and default value
-    default_initial = ((name, options[0])
-                       for name, options in settings.CONFIG.items())
+    default_initial = ((name, options[0]) for name, options in settings.CONFIG.items())
     # Then update the mapping with actually values from the backend
     initial = dict(default_initial, **dict(config._backend.mget(settings.CONFIG)))
 
@@ -97,39 +95,49 @@ def get_values():
 
 class ConstanceForm(forms.Form):
     version = forms.CharField(widget=forms.HiddenInput)
+    _request = None
 
     def __init__(self, initial, request=None, *args, **kwargs):
+        self.request = request
         super().__init__(*args, initial=initial, **kwargs)
         version_hash = hashlib.sha256()
-
         only_view = request and not request.user.has_perm('constance.change_config')
         if only_view:
             messages.warning(
                 request,
                 _("You don't have permission to change these values"),
             )
-
         for name, options in settings.CONFIG.items():
             default = options[0]
-            if len(options) == 3:
+            if len(options) in (3, 4):
                 config_type = options[2]
                 if config_type not in settings.ADDITIONAL_FIELDS and not isinstance(default, config_type):
-                    raise ImproperlyConfigured(_("Default value type must be "
-                                                 "equal to declared config "
-                                                 "parameter type. Please fix "
-                                                 "the default value of "
-                                                 "'%(name)s'.")
-                                               % {'name': name})
+                    raise ImproperlyConfigured(
+                        _(
+                            "Default value type must be "
+                            "equal to declared config "
+                            "parameter type. Please fix "
+                            "the default value of "
+                            "'%(name)s'."
+                        )
+                        % {'name': name}
+                    )
+                permissions = options[3] if len(options) == 4 else None
+                if request and not has_setting_permission(request, permissions):
+                    continue
             else:
                 config_type = type(default)
 
             if config_type not in FIELDS:
-                raise ImproperlyConfigured(_("Constance doesn't support "
-                                             "config values of the type "
-                                             "%(config_type)s. Please fix "
-                                             "the value of '%(name)s'.")
-                                           % {'config_type': config_type,
-                                              'name': name})
+                raise ImproperlyConfigured(
+                    _(
+                        "Constance doesn't support "
+                        "config values of the type "
+                        "%(config_type)s. Please fix "
+                        "the value of '%(name)s'."
+                    )
+                    % {'config_type': config_type, 'name': name}
+                )
             field_class, kwargs = FIELDS[config_type]
             if only_view:
                 kwargs['disabled'] = True
@@ -144,6 +152,11 @@ class ConstanceForm(forms.Form):
             self.cleaned_data[file_field] = default_storage.save(file.name, file)
 
         for name in settings.CONFIG:
+            options = settings.CONFIG[name]
+            permissions = options[3] if len(options) == 4 else None
+            if not has_setting_permission(self.request, permissions):
+                continue
+
             current = getattr(config, name)
             new = self.cleaned_data[name]
 
@@ -163,9 +176,13 @@ class ConstanceForm(forms.Form):
             return value
 
         if value != self.initial['version']:
-            raise forms.ValidationError(_('The settings have been modified '
-                                          'by someone else. Please reload the '
-                                          'form and resubmit your changes.'))
+            raise forms.ValidationError(
+                _(
+                    'The settings have been modified '
+                    'by someone else. Please reload the '
+                    'form and resubmit your changes.'
+                )
+            )
         return value
 
     def clean(self):
@@ -173,11 +190,10 @@ class ConstanceForm(forms.Form):
 
         if not settings.CONFIG_FIELDSETS:
             return cleaned_data
-
         if get_inconsistent_fieldnames():
-            raise forms.ValidationError(_('CONSTANCE_CONFIG_FIELDSETS is missing '
-                                          'field(s) that exists in CONSTANCE_CONFIG.'))
-
+            raise forms.ValidationError(
+                _('CONSTANCE_CONFIG_FIELDSETS is missing ' 'field(s) that exists in CONSTANCE_CONFIG.')
+            )
         return cleaned_data
 
 
@@ -192,12 +208,8 @@ class ConstanceAdmin(admin.ModelAdmin):
     def get_urls(self):
         info = self.model._meta.app_label, self.model._meta.module_name
         return [
-            path('',
-                self.admin_site.admin_view(self.changelist_view),
-                name='%s_%s_changelist' % info),
-            path('',
-                self.admin_site.admin_view(self.changelist_view),
-                name='%s_%s_add' % info),
+            path('', self.admin_site.admin_view(self.changelist_view), name='%s_%s_changelist' % info),
+            path('', self.admin_site.admin_view(self.changelist_view), name='%s_%s_add' % info),
         ]
 
     def get_config_value(self, name, options, form, initial):
@@ -239,9 +251,7 @@ class ConstanceAdmin(admin.ModelAdmin):
         form_cls = self.get_changelist_form(request)
         form = form_cls(initial=initial, request=request)
         if request.method == 'POST' and request.user.has_perm('constance.change_config'):
-            form = form_cls(
-                data=request.POST, files=request.FILES, initial=initial
-            )
+            form = form_cls(data=request.POST, files=request.FILES, initial=initial, request=request)
             if form.is_valid():
                 form.save()
                 messages.add_message(
@@ -261,9 +271,8 @@ class ConstanceAdmin(admin.ModelAdmin):
             icon_type='gif' if VERSION < (1, 9) else 'svg',
         )
         for name, options in settings.CONFIG.items():
-            context['config_values'].append(
-                self.get_config_value(name, options, form, initial)
-            )
+            if name in form.fields:
+                context['config_values'].append(self.get_config_value(name, options, form, initial))
 
         if settings.CONFIG_FIELDSETS:
             context['fieldsets'] = []
@@ -275,33 +284,37 @@ class ConstanceAdmin(admin.ModelAdmin):
                     fields_list = fieldset_data
                     collapse = False
 
-                absent_fields = [field for field in fields_list
-                                 if field not in settings.CONFIG]
-                assert not any(absent_fields), (
-                    "CONSTANCE_CONFIG_FIELDSETS contains field(s) that does "
-                    "not exist: %s" % ', '.join(absent_fields))
+                absent_fields = [field for field in fields_list if field not in settings.CONFIG]
+                assert not any(
+                    absent_fields
+                ), "CONSTANCE_CONFIG_FIELDSETS contains field(s) that does " "not exist: %s" % ', '.join(absent_fields)
 
                 config_values = []
 
                 for name in fields_list:
                     options = settings.CONFIG.get(name)
-                    if options:
-                        config_values.append(
-                            self.get_config_value(name, options, form, initial)
-                        )
-                fieldset_context = {
-                    'title': fieldset_title,
-                    'config_values': config_values
-                }
 
-                if collapse:
-                    fieldset_context['collapse'] = True
-                context['fieldsets'].append(fieldset_context)
+                    if options:
+                        permissions = options[3] if len(options) == 4 else None
+                        if has_setting_permission(request, permissions):
+                            config_values.append(self.get_config_value(name, options, form, initial))
+
+                if config_values:
+                    fieldset_context = {'title': fieldset_title, 'config_values': config_values}
+
+                    if collapse:
+                        fieldset_context['collapse'] = True
+                    context['fieldsets'].append(fieldset_context)
+
+            if context['fieldsets'] == []:
+                context['config_values'] = []
+
             if not isinstance(settings.CONFIG_FIELDSETS, OrderedDict):
                 context['fieldsets'].sort(key=itemgetter('title'))
 
         if not isinstance(settings.CONFIG, OrderedDict):
             context['config_values'].sort(key=itemgetter('name'))
+
         request.current_app = self.admin_site.name
         return TemplateResponse(request, self.change_list_template, context)
 
