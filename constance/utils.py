@@ -16,11 +16,14 @@ def has_setting_permission(request, permissions=None):
         return True
 
     modules = []
-    if isinstance(permissions, (list, tuple)):
-        for permission in permissions:
+    if not isinstance(permissions, (list, tuple)):
+        permissions = [permissions]
+
+    for permission in permissions:
+        if isinstance(permission, str):
             modules.append(import_string(permission))
-    else:
-        modules = [import_string(permissions)]
+        else:
+            modules.append(permission)
 
     results = []
     for module in modules:

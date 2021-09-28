@@ -12,7 +12,7 @@ from django.test import TestCase, RequestFactory
 from constance import settings
 from constance.admin import Config
 from constance.admin import get_values
-
+from .permissions import SampleDenyPermission, SampleAllowPermission
 
 class TestAdmin(TestCase):
     model = Config
@@ -210,3 +210,15 @@ class TestAdmin(TestCase):
     def test_labels(self):
         self.assertEqual(type(self.model._meta.label), str)
         self.assertEqual(type(self.model._meta.label_lower), str)
+
+    @mock.patch('constance.settings.CONFIG', {
+        'INT_VALUE': (1, 'some int', int, SampleAllowPermission),
+        'STR_VALUE': ('!', 'some str', str, (SampleDenyPermission,))
+    })
+    def test_setting_permission(self):
+        self.client.login(username='admin', password='nimda')
+        request = self.rf.get('/admin/constance/config/')
+        request.user = self.superuser
+        response = self.options.changelist_view(request, {})
+        self.assertContains(response, 'INT_VALUE')
+        self.assertNotContains(response, 'STR_VALUE')
