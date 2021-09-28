@@ -30,6 +30,8 @@ def has_setting_permission(request, permissions=None):
         if hasattr(module, 'has_setting_permission'):
             results.append(module().has_setting_permission(request))
         else:
-            raise AttributeError(f'{module} doesn\'t contain a has_setting_permission method')
+            raise AttributeError(
+                f'{module} doesn\'t contain a has_setting_permission method'
+            )
 
     return results and all(results)
