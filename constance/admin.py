@@ -98,7 +98,6 @@ def get_values():
 
 class ConstanceForm(forms.Form):
     version = forms.CharField(widget=forms.HiddenInput)
-    _request = None
 
     def __init__(self, initial, request=None, *args, **kwargs):
         self.request = request
