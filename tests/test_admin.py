@@ -12,7 +12,7 @@ from django.test import TestCase, RequestFactory
 from constance import settings
 from constance.admin import Config
 from constance.admin import get_values
-from .permissions import SampleDenyPermission, SampleAllowPermission
+from .permissions import SampleDenyPermission, SampleAllowPermission, DefaultPermission
 
 class TestAdmin(TestCase):
     model = Config
@@ -222,3 +222,8 @@ class TestAdmin(TestCase):
         response = self.options.changelist_view(request, {})
         self.assertContains(response, 'INT_VALUE')
         self.assertNotContains(response, 'STR_VALUE')
+
+        with mock.patch('constance.utils.DEFAULT_SETTING_PERMISSIONS', DefaultPermission):
+            response = self.options.changelist_view(request, {})
+            self.assertContains(response, 'INT_VALUE')
+            self.assertContains(response, 'STR_VALUE')
