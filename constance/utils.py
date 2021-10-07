@@ -8,6 +8,26 @@ def import_module_attr(path):
     return getattr(import_module(package), module)
 
 
+def get_permission_module(module_name):
+    if isinstance(module_name, str):
+        return import_string(module_name)
+    else:
+        return module_name
+
+def has_permission(permission, request):
+    if permission is None:
+        return True
+
+    module = get_permission_module(permission)
+
+    if hasattr(module, 'has_setting_permission'):
+        return module().has_setting_permission(request)
+    else:
+        raise AttributeError(
+            f'{module} doesn\'t contain a has_setting_permission method'
+        )
+
+
 def has_setting_permission(request, permissions=None):
     if permissions is None:
         permissions = DEFAULT_SETTING_PERMISSIONS
@@ -15,23 +35,14 @@ def has_setting_permission(request, permissions=None):
     if permissions is None:
         return True
 
-    modules = []
+    if DEFAULT_SETTING_PERMISSIONS and has_permission(DEFAULT_SETTING_PERMISSIONS, request):
+        return True
+
     if not isinstance(permissions, (list, tuple)):
         permissions = [permissions]
 
-    for permission in permissions:
-        if isinstance(permission, str):
-            modules.append(import_string(permission))
-        else:
-            modules.append(permission)
-
     results = []
-    for module in modules:
-        if hasattr(module, 'has_setting_permission'):
-            results.append(module().has_setting_permission(request))
-        else:
-            raise AttributeError(
-                f'{module} doesn\'t contain a has_setting_permission method'
-            )
+    for permission in permissions:
+        results.append(has_permission(permission, request))
 
     return results and all(results)
